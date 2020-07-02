@@ -1,0 +1,16 @@
+{
+  apps : [
+    {
+      name: "recommender-proxy (development)",
+      script: "npm run start",
+      interpreter: "none",
+      watch: false,
+      cwd: "/home/ubuntu/recommender-proxy",
+      env: {
+        "PORT": 9002,
+        "NODE_ENV": "development",
+        "HOST": "0.0.0.0"
+      }
+    }
+  ]
+}
