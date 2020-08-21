@@ -11,25 +11,10 @@ import os
 import re
 import requests
 import urllib.parse
-
-def cosSim(search, query):
-  dot = np.dot(search, query)
-  norm1 = np.linalg.norm(query)
-  norm2 = np.linalg.norm(search)
-  return dot / (norm1 * norm2)
-
-def patternSim(search, query):
-  return np.divide(np.count_nonzero(np.equal(search, query), axis=0), len(search))
-
-def sim(queryStates, queryScores, searchStates, searchScores, patternWeight, shapeWeight):
-  pattern = np.apply_along_axis(patternSim, 1, searchStates, queryStates)
-  shape = np.apply_along_axis(cosSim, 1, searchScores, queryScores)
-  pattern = pattern * patternWeight
-  shape = shape * shapeWeight
-  return pattern + shape
+import ast
 
 def trueSim(forward, reverse):
-  return forward if forward > reverse else reverse
+  return forward if forward < reverse else reverse
 
 def tabixUrl(**kwargs):
   url = None
@@ -102,34 +87,15 @@ def windowParameters(**kwargs):
   end = kwargs["end"]
   approx_size = end - start
   midpoint = start + (approx_size // 2)
-  if (approx_size < 30000):
-    start = midpoint - 7500
-    end = midpoint + 7300
-    window_size = 50
-    if (start < 0):
-      start = 0
-      end = 12500
-  elif (approx_size < 75000):
-    start = midpoint - 37500
-    end = midpoint + 37300
-    window_size = 250
-    if (start < 0):
-      start = 0
-      end = 62500
-  elif (approx_size < 150000):
-    start = midpoint - 75000
-    end - midpoint + 74800
-    window_size = 500
-    if (start < 0):
-      start = 0
-      end = 1250000
-  else:
-    start = midpoint - 150000
-    end = midpoint + 149800
-    window_size = 1000
-    if (start < 0):
-      start = 0
-      end = 250000
+  sizes = [10000, 25000, 50000]
+  window_finder = [(i, abs(sizes[i] - approx_size)) for i in range(len(sizes))]
+  window_finder.sort(key = lambda x:x[1])
+  start = midpoint - sizes[window_finder[0][0]] * 0.6
+  end = midpoint + (sizes[window_finder[0][0]] * 0.6) - 200
+  window_size = sizes[window_finder[0][0]] // 200
+  if start < 0:
+    start = 0
+    end = sizes[window_finder[0][0]] * 1.1
   return (window_size, start, end)
 
 @click.command()
@@ -144,14 +110,12 @@ def windowParameters(**kwargs):
 @click.option("-c", "--chromosome",             type=str,      required=True,     help="Query chromosome")
 @click.option("-s", "--start",                  type=int,      required=True,     help="Query start position")
 @click.option("-e", "--end",                    type=int,      required=True,     help="Query end position")
-@click.option("-p", "--pattern",                type=float,    required=False,    help="Weight of Query Pattern, out of 1",                 default=0.35)
-@click.option("-h", "--shape",                  type=float,    required=False,    help="Weight of Query Shape, out of 1",                   default=0.65)
 @click.option("-t", "--tabix-source",           type=str,      required=False,    help="Tabix data source (file or remote)",                default="file")
 @click.option("-u", "--tabix-url",              type=str,      required=False,    help="Tabix data root URL (file or remote)",              default="file:///net/seq/data/projects/Epilogos/epilogos-by-sample-group")
-@click.option("-b", "--database-url",           type=str,      required=False,    help="Database root URL (file)",                          default="file:///home/ntripician/slurm/RecommenderDatabase")
+@click.option("-b", "--database-url",           type=str,      required=False,    help="Database root URL (file)",                          default="file:///home/ntripician/slurm/MatrixDatabase")
 @click.option("-o", "--output-destination",     type=str,      required=False,    help="Output destination (regular file or stdout)",       default="regular_file")
-@click.option("-O", "--output-filename",        type=str,      required=False,    help="Output filename (if destination is regular file)",  default="FAST.bed")
-@click.option("-v", "--verbose",                type=bool,     required=False,    help="Log runtimes",                                      default=False)
+@click.option("-O", "--output-filename",        type=str,      required=False,    help="Output filename (if destination is regular file)",  default="MATRIX.bed")
+@click.option("-v", "--verbose",                is_flag=True,  required=False,    help="Log runtimes",                                      default=False)
 
 def main(**kwargs):
   """
@@ -176,7 +140,10 @@ def main(**kwargs):
   # pytabix library accepts URI with file or http scheme
   tabix_url = tabixUrl(**kwargs)
   tabix_handle = tabix.open(tabix_url)
-  tabix_query = tabix_handle.query(kwargs["chromosome"], kwargs["start"], kwargs["end"])
+  try:
+    tabix_query = tabix_handle.query(kwargs["chromosome"], int(kwargs["start"]), int(kwargs["end"]))
+  except TypeError as err:
+    raise SyntaxError("Error: Could not query the specified interval: {}:{}-{}\n".format(kwargs["chromosome"], kwargs["start"], kwargs["end"]))
   
   if kwargs["verbose"]:
     sys.stderr.write("\ntabix\n")
@@ -186,10 +153,10 @@ def main(**kwargs):
   qFrame = pd.DataFrame(tabix_query)
 
   qLocs = qFrame.iloc[:, 0:3]
-  qScores = qFrame.iloc[:, 3:].astype("float")
+  qMatrix = qFrame.iloc[:, 3:].astype('float')
 
-  states = qScores.idxmax(axis=1) - 3
-  scores = qScores.sum(axis=1)
+  states = qMatrix.idxmax(axis=1) - 3
+  scores = qMatrix.sum(axis=1)
 
   avgScore = scores.rolling(kwargs["window_size"]).mean()
   avgScore = avgScore[kwargs["window_size"]-1:]
@@ -209,29 +176,24 @@ def main(**kwargs):
       localMaxIndex = currentIndex
     prevIndex = currentIndex
 
-  states = states[localMaxIndex-kwargs["window_size"]+1:localMaxIndex+1]
-  scores = scores[localMaxIndex-kwargs["window_size"]+1:localMaxIndex+1]
+  qMatrix = qMatrix[localMaxIndex-kwargs["window_size"]+1:localMaxIndex+1]
 
   idx, count = np.unique(states.to_numpy(), return_counts=True)
   maxS = idx[np.argmax(count)]
 
-  statesRev = states.copy().iloc[::-1]
-  statesRev.columns = [i + 3 for i in range(kwargs["window_size"])]
-
-  scoresRev = scores.copy().iloc[::-1]
-  scoresRev.columns = [i + 3 for i in range(kwargs["window_size"])]
+  matrixRev = qMatrix.copy().iloc[::-1].values
+  matrix = qMatrix.values
 
   if kwargs["verbose"]:
     sys.stderr.write("\nquery read in + reverse\n")
-    sys.stderr.write("--- {} seconds ---".format(time.time() - timeStart))
+    sys.stderr.write("--- {} seconds ---\n".format(time.time() - timeStart))
     timeStart = time.time()
 
   # Python and numpy do not read URI with file scheme
   database_path = databasePath(**kwargs)
   fileName = os.path.join(database_path, "State" + str(maxS + 1))
   fileLocs = pd.DataFrame(data=np.load(fileName + "-Locs.npz", allow_pickle=True)["arr"])
-  fileStates = np.load(fileName + "-States.npz")["arr"]
-  fileScores = np.load(fileName + "-Scores.npz")["arr"]
+  fileMatrix = np.load(fileName + "-Matrix.npz")["arr"]
 
   if kwargs["verbose"]:
     sys.stderr.write("\ndatabase read in\n")
@@ -239,12 +201,12 @@ def main(**kwargs):
     timeStart = time.time()
 
   fileLocs.columns = ["chr", "start", "end"]
-  fileLocs["sim_forward"] = sim(states.values, scores.values, fileStates, fileScores, kwargs["pattern"], kwargs["shape"])
-  fileLocs["sim_rev"] = sim(statesRev.values, scoresRev.values, fileStates, fileScores, kwargs["pattern"], kwargs["shape"])
-
+  fileLocs['sim_forward'] = np.linalg.norm(fileMatrix - matrix, axis=(1,2))
+  fileLocs['sim_rev'] = np.linalg.norm(fileMatrix - matrixRev, axis=(1,2))
+  
   fileLocs["sim"] = fileLocs.apply(func=lambda row: trueSim(row["sim_forward"], row["sim_rev"]), axis=1)
 
-  fileLocs = fileLocs.sort_values(["sim"], ascending=False)
+  fileLocs = fileLocs.sort_values(["sim"])
 
   if len(fileLocs) > 100:
     fileLocs = fileLocs[:100]

@@ -115,7 +115,7 @@ app.get("/favicon.ico", (req, res) => {
 
 /**
  *
- * GET https://localhost:9002/?datasetEncoded=...&datasetAltname=...&assembly=...&stateModel=...&groupEncoded=...&groupAltname=...&saliencyLevel=...&saliencyLevelAltname=...&chromosome=...&start=...&end=...&weightPattern=...&weightShape=...&tabixSource=...&tabixUrlEncoded=...&databaseUrlEncoded=...&outputDestination=...
+ * GET https://localhost:9002/?datasetEncoded=...&datasetAltname=...&assembly=...&stateModel=...&groupEncoded=...&groupAltname=...&saliencyLevel=...&saliencyLevelAltname=...&chromosome=...&start=...&end=...&tabixSource=...&tabixUrlEncoded=...&databaseUrlEncoded=...&outputDestination=...
  *
  */
 
@@ -131,8 +131,6 @@ app.get("/", (req, res, next) => {
   let chromosome = req.query.chromosome;
   let start = req.query.start;
   let end = req.query.end;
-  let weightPattern = req.query.weightPattern;
-  let weightShape = req.query.weightShape;
   let tabixSource = req.query.tabixSource;
   let tabixUrl = decodeURIComponent(req.query.tabixUrlEncoded);
   let databaseUrl = decodeURIComponent(req.query.databaseUrlEncoded);
@@ -164,8 +162,6 @@ app.get("/", (req, res, next) => {
     "--chromosome", chromosome,
     "--start", start, 
     "--end", end,
-    "--pattern", weightPattern,
-    "--shape", weightShape,
     "--tabix-source", tabixSource,
     "--tabix-url", tabixUrl,
     "--database-url", databaseUrl,
