@@ -3,8 +3,8 @@
 DATASET_ENCODED=ROADMAP
 DATASET_DECODED=ROADMAP
 DATASET_ALTNAME=vA
-ASSEMBLY=hg19
-STATE_MODEL=15
+ASSEMBLY=hg38
+STATE_MODEL=18
 GROUP_ENCODED=All_127_Roadmap_epigenomes
 GROUP_DECODED=All_127_Roadmap_epigenomes
 GROUP_ALTNAME=all
@@ -19,6 +19,7 @@ TABIX_URL_DECODED=http://explore.altius.org/tabix
 DATABASE_URL_ENCODED=file%3A%2F%2F%2Fhome%2Fubuntu%2Frecommender-proxy%2Fassets%2FMatrixDatabase
 DATABASE_URL_DECODED=file:///home/ubuntu/recommender-proxy/assets/MatrixDatabase
 OUTPUT_DESTINATION=stdout
+OUTPUT_FORMAT=JSON
 
 echo "../recommender.py --dataset ${DATASET_DECODED} --dataset-altname ${DATASET_ALTNAME} --assembly ${ASSEMBLY} --state-model ${STATE_MODEL} --group ${GROUP_ENCODED} --group-altname ${GROUP_ALTNAME} --saliency-level ${SALIENCY_LEVEL} --saliency-level-altname ${SALIENCY_LEVEL_ALTNAME} --chromosome ${CHROMOSOME} --start ${START} --end ${END} --tabix-source ${TABIX_SOURCE} --tabix-url ${TABIX_URL_DECODED} --database-url ${DATABASE_URL_DECODED} --output-destination ${OUTPUT_DESTINATION}"
 
@@ -36,4 +37,5 @@ echo "../recommender.py --dataset ${DATASET_DECODED} --dataset-altname ${DATASET
 		  --tabix-source ${TABIX_SOURCE} \
 		  --tabix-url ${TABIX_URL_DECODED} \
 		  --database-url ${DATABASE_URL_DECODED} \
-		  --output-destination ${OUTPUT_DESTINATION}
+		  --output-destination ${OUTPUT_DESTINATION} \
+		  --output-format ${OUTPUT_FORMAT}

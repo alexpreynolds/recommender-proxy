@@ -12,6 +12,9 @@ import re
 import requests
 import urllib.parse
 import ast
+import json
+
+BIN_SIZE = 200
 
 def trueSim(forward, reverse):
   return forward if forward < reverse else reverse
@@ -88,15 +91,17 @@ def windowParameters(**kwargs):
   approx_size = end - start
   midpoint = start + (approx_size // 2)
   sizes = [10000, 25000, 50000]
+  size_keys = ["10k", "25k", "50k"] # used for exemplar keying
   window_finder = [(i, abs(sizes[i] - approx_size)) for i in range(len(sizes))]
   window_finder.sort(key = lambda x:x[1])
-  start = midpoint - sizes[window_finder[0][0]] * 0.6
-  end = midpoint + (sizes[window_finder[0][0]] * 0.6) - 200
-  window_size = sizes[window_finder[0][0]] // 200
+  window_scale = window_finder[0][0]
+  start = midpoint - sizes[window_scale] * 0.6
+  end = midpoint + (sizes[window_scale] * 0.6) - BIN_SIZE
+  window_size = sizes[window_scale] // BIN_SIZE
   if start < 0:
     start = 0
     end = sizes[window_finder[0][0]] * 1.1
-  return (window_size, start, end)
+  return (window_size, start, end, midpoint, sizes[window_scale], size_keys[window_scale])
 
 @click.command()
 @click.option("-d", "--dataset",                type=str,      required=True,     help="Source publication or dataset (ROADMAP, ADSERA, or GORKIN)")
@@ -115,6 +120,7 @@ def windowParameters(**kwargs):
 @click.option("-b", "--database-url",           type=str,      required=False,    help="Database root URL (file)",                          default="file:///home/ntripician/slurm/MatrixDatabase")
 @click.option("-o", "--output-destination",     type=str,      required=False,    help="Output destination (regular file or stdout)",       default="regular_file")
 @click.option("-O", "--output-filename",        type=str,      required=False,    help="Output filename (if destination is regular file)",  default="MATRIX.bed")
+@click.option("-f", "--output-format",          type=str,      required=False,    help="Output format (BED or JSON)",                       default="BED")
 @click.option("-v", "--verbose",                is_flag=True,  required=False,    help="Log runtimes",                                      default=False)
 
 def main(**kwargs):
@@ -130,7 +136,7 @@ def main(**kwargs):
     timeStart = time.time()
 
   # window parameters
-  (kwargs["window_size"], kwargs["start"], kwargs["end"]) = windowParameters(**kwargs)
+  (kwargs["window_size"], kwargs["start"], kwargs["end"], kwargs["midpoint"], kwargs["window_width"], kwargs["size_key"]) = windowParameters(**kwargs)
 
   if kwargs["verbose"]:
     sys.stderr.write("\npadding\n")
@@ -151,6 +157,8 @@ def main(**kwargs):
     timeStart = time.time()
 
   qFrame = pd.DataFrame(tabix_query)
+  if qFrame.empty and kwargs["tabix_source"] == "remote":
+    raise SyntaxError("Error: Could not query the specified interval: {}:{}-{}\n".format(kwargs["chromosome"], kwargs["start"], kwargs["end"]))
 
   qLocs = qFrame.iloc[:, 0:3]
   qMatrix = qFrame.iloc[:, 3:].astype('float')
@@ -217,7 +225,7 @@ def main(**kwargs):
     timeStart = time.time()
 
   # write results to regular file or to standard output
-  if kwargs["output_destination"] == "regular_file":
+  if kwargs["output_destination"] == "regular_file" and kwargs["output_format"] == "BED":
     with open(kwargs["output_filename"], "w") as f:
       for index, row in fileLocs.iterrows():
         line = "{}\t{}\t{}\n".format(row["chr"], row["start"], row["end"])
@@ -225,12 +233,44 @@ def main(**kwargs):
       if kwargs["verbose"]:
         sys.stderr.write("\nbed file\n")
         sys.stderr.write("--- {} seconds ---\n".format(time.time() - timeStart))
-  elif kwargs["output_destination"] == "stdout":
+  elif kwargs["output_destination"] == "stdout" and kwargs["output_format"] == "BED":
     for index, row in fileLocs.iterrows():
       line = "{}\t{}\t{}\n".format(row["chr"], row["start"], row["end"])
       sys.stdout.write(line)
+  elif kwargs["output_destination"] == "stdout" and kwargs["output_format"] == "JSON":
+    # query object setup
+    query_chromosome = kwargs["chromosome"]
+    padding = int(kwargs["window_width"]) // 2
+    query_start = int(kwargs["midpoint"]) - padding
+    query_end = int(kwargs["midpoint"]) + padding
+    bin_offset = query_start % BIN_SIZE
+    query_start -= bin_offset
+    query_end -= bin_offset    
+    query_midpoint = kwargs["midpoint"] - (bin_offset // 2) 
+    query_size_key = kwargs["size_key"]
+    results = {
+      "query" : {
+        "chromosome" : query_chromosome,
+        "start" : query_start,
+        "end" : query_end,
+        "midpoint" : query_midpoint,
+        "sizeKey" : query_size_key
+      },
+      "hits" : ""
+    }
+    hits_list = []
+    for index, (index_label, row) in enumerate(fileLocs.iterrows()):
+      line = "{}\t{}\t{}\n".format(row["chr"], row["start"], row["end"])
+      if index != 0:
+        hits_list.append(line)
+      elif row["chr"] != kwargs["chromosome"]: 
+        hits_list.append(line)
+      elif row["chr"] == kwargs["chromosome"] and (int(row["end"]) < kwargs["start"] or int(row["start"]) > kwargs["end"]):
+        hits_list.append(line)
+    results["hits"] = ''.join(hits_list)
+    sys.stdout.write(json.dumps(results, ensure_ascii=False))
   else:
-    raise SystemError("Error: Unknown output destination type specified\n")
+    raise SystemError("Error: Unknown output destination type and/or format specified\n")
 
   if kwargs["verbose"]:
     sys.stderr.write("\n___-----___-----___-----___-----___--\n")
