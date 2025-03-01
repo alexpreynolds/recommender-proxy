@@ -12,6 +12,7 @@ const normalizePort = require("normalize-port");
 const nocache = require("nocache");
 const morgan = require("morgan");
 const spawn = require("child_process").spawn;
+const spawnSync = require("child_process").spawnSync;
 const util = require("util");
 
 const app = module.exports = express();
@@ -94,7 +95,7 @@ function cors(req, res, next) {
 
   // Respond OK if the method is OPTIONS
   if (req.method === "OPTIONS") {
-    return res.send(200);
+    return res.sendStatus(200);
   } else {
     return next();
   }
@@ -131,12 +132,14 @@ app.get("/v2", (req, res, next) => {
   let end = parseInt(req.query.end);
   let tabixUrl = decodeURIComponent(req.query.tabixUrlEncoded);
   let scaleLevel = parseInt(req.query.scaleLevel);
-  let windowSize = parseInt(req.query.windowSize);   
+  let windowSize = parseInt(req.query.windowSize);
+  let rawBp = parseInt(req.query.rawBp);
   let outputFormat = req.query.outputFormat;
   let queryRegionDiff = end - start;
   let windowSizeRawBases = windowSize * 1000;
   let hitPadding = parseInt(parseFloat(queryRegionDiff - windowSizeRawBases) / 2);
   let queryRegionDiffAsWindowSize = parseInt(parseFloat(queryRegionDiff) / 1000);
+    
   /**
    * We use a temporary directory as a working directory, so 
    * that tbi index files are stored where they will be deleted,
@@ -149,7 +152,8 @@ app.get("/v2", (req, res, next) => {
    * assembly and state model (for example, Roadmap and Adsera datasets).
    * This will lead to queries failing or returning bogus results.
    */
-  const tabixIndexTmpDir = (datasetAltname === 'dhsIndex') ? `/tmp/${datasetAltname}/${assembly}/${group}/${scaleLevel}/${windowSize}` : `/tmp/recommender/v2/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}`;
+  // const tabixIndexTmpDir = (datasetAltname === 'dhsIndex') ? `/tmp/${datasetAltname}/${assembly}/${group}/${rawBp}bp` : `/tmp/recommender/v2/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}`;
+  const tabixIndexTmpDir = (datasetAltname === 'dhsIndex') ? `/tmp/${datasetAltname}/${assembly}/${group}/${rawBp}bp` : `/tmp/28Feb2025/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}`;
   if (!fs.existsSync(tabixIndexTmpDir)) { fs.mkdirSync(tabixIndexTmpDir, { recursive: true }); }
   const tabixSpawnOptions = {
     "cwd"   : tabixIndexTmpDir,
@@ -160,10 +164,14 @@ app.get("/v2", (req, res, next) => {
   //
   // const scaleLevel = 5;
   // const windowSize = 25;
-  const tabixPath = (datasetAltname === 'dhsIndex') ? `${tabixUrl}/${datasetAltname}/${assembly}/${group}/${scaleLevel}/${windowSize}/recommendations.bed.gz` : `${tabixUrl}/recommender/v2/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}/recommendations.bed.gz`;
+  const defaultMinmax = {"abs_val_sum": { "min": 0.5, "max": 12 }};
+  // const tabixPath = (datasetAltname === 'dhsIndex') ? `${tabixUrl}/${datasetAltname}/${assembly}/${group}/${rawBp}bp/recommendations.bed.gz` : `${tabixUrl}/recommender/v2/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}/recommendations.bed.gz`;
+  const tabixPath = (datasetAltname === 'dhsIndex') ? `${tabixUrl}/${datasetAltname}/${assembly}/${group}/${rawBp}bp/recommendations.bed.gz` : `${tabixUrl}/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}/recommendations.bed.gz`;
+  // console.log(`tabixPath ${tabixPath}`);
   const midpoint = start + Math.abs(Math.floor((end - start) / 2));
   // const tabixRange = `${chromosome}:${midpoint}-${(midpoint+1)}`;
   const tabixRange = `${chromosome}:${start}-${end}`;
+  console.log(`/usr/bin/tabix ${tabixPath} ${tabixRange}`);  
   const tabixCmdArgs = [tabixPath, tabixRange];
   const tabixCmd = spawn('/usr/bin/tabix', tabixCmdArgs, tabixSpawnOptions);
   let tabixData = '';
@@ -207,6 +215,7 @@ app.get("/v2", (req, res, next) => {
           },
           "hits":[] 
         };
+        // console.log(`${JSON.stringify(tabixData)}`);
         let tabixLines = tabixData.split('\n');
         const tabixLineCountZi = tabixLines.length - 2;
         processedTabixObject.query.hitCount = tabixLines.length - 1;
@@ -242,8 +251,8 @@ app.get("/v2", (req, res, next) => {
           tabixLines.forEach((r, i) => {
             if (r && i === tabixLCZiMid) {
               processedTabixObject.query.hitFirstInterval = r.split('\t').slice(0, 3);
-              processedTabixObject.query.hitFirstStartDiff = processedTabixObject.query.hitFirstInterval[1] - start;
-              processedTabixObject.query.hitFirstEndDiff = end - processedTabixObject.query.hitFirstInterval[2];
+              processedTabixObject.query.hitFirstStartDiff = parseInt(processedTabixObject.query.hitFirstInterval[1]) - start;
+              processedTabixObject.query.hitFirstEndDiff = end - parseInt(processedTabixObject.query.hitFirstInterval[2]);
               const fields = r.split('\t')[3];
               let tabixHits = null;
               try {
@@ -252,6 +261,8 @@ app.get("/v2", (req, res, next) => {
                   let tabixHitElements = hv.split(':');
                   tabixHitElements[1] = parseInt(tabixHitElements[1]) - processedTabixObject.query.hitFirstStartDiff;
                   tabixHitElements[2] = parseInt(tabixHitElements[2]) + processedTabixObject.query.hitFirstEndDiff;
+                  tabixHitElements[1] = (tabixHitElements[1] < 0) ? 0 : tabixHitElements[1];
+                  tabixHitElements[2] = (tabixHitElements[2] < 0) ? 0 : tabixHitElements[2];
                   tabixHits[hi] = tabixHitElements.join(':');
                 });
               }
@@ -259,7 +270,7 @@ app.get("/v2", (req, res, next) => {
                 tabixHits = JSON.parse(fields.replace('"[', '[').replace(']"', ']').replace(/""/g, '"'));
                 // console.log(`tabixHits post-replace | ${tabixHits.length} | ${tabixHits}`);
               }
-              const firstHit = tabixHits[0].split(':');
+              // const firstHit = tabixHits[0].split(':');
               // processedTabixObject.query.chromosome = firstHit[0];
               // processedTabixObject.query.start = parseInt(firstHit[1]) - hitPadding;
               // processedTabixObject.query.end = parseInt(firstHit[2]) + hitPadding;
@@ -270,6 +281,42 @@ app.get("/v2", (req, res, next) => {
               // processedTabixObject.tabixHits.push(tabixHits.slice(1).join('\n').replace(/:/g, '\t'));
               let postPaddedHits = tabixHits.slice(1).join('\n').replace(/:/g, '\t');
               processedTabixObject.hits.push(postPaddedHits);
+              processedTabixObject.query.hitStartDiff = processedTabixObject.query.hitFirstStartDiff;
+              processedTabixObject.query.hitEndDiff = processedTabixObject.query.hitFirstEndDiff;
+              //
+              // const tabixMinmaxPath = (datasetAltname === 'dhsIndex') ? `${tabixUrl}/${datasetAltname}/${assembly}/${group}/${rawBp}bp/recommendations.minmax.bed.gz` : `${tabixUrl}/recommender/v2/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}/recommendations.minmax.bed.gz`;
+	      const tabixMinmaxPath = (datasetAltname === 'dhsIndex') ? `${tabixUrl}/${datasetAltname}/${assembly}/${group}/${rawBp}bp/recommendations.minmax.bed.gz` : `${tabixUrl}/${datasetAltname}/${assembly}/${stateModel}/${group}/${saliencyLevel}/${scaleLevel}/${windowSize}/recommendations.minmax.bed.gz`;
+              const tabixMinmaxRange = `${processedTabixObject.query.hitFirstInterval[0]}:${processedTabixObject.query.hitFirstInterval[1]}-${processedTabixObject.query.hitFirstInterval[2]}`;
+              const tabixMinmaxCmdArgs = [tabixMinmaxPath, tabixMinmaxRange];
+              processedTabixObject.query.minmaxCmd = `/usr/bin/tabix ${tabixMinmaxCmdArgs[0]} ${tabixMinmaxCmdArgs[1]}`;
+              // console.error(`minmaxCmd ${processedTabixObject.query.minmaxCmd}`);
+              // processedTabixObject.query.r = r;
+              try {
+                const tabixMinmaxCmd = spawnSync('/usr/bin/tabix', tabixMinmaxCmdArgs, {
+                  stdio: ['ignore', 'pipe', 'inherit'],
+                  cwd : tabixIndexTmpDir,
+                  encoding: 'utf-8',
+                  shell: true,
+                });
+                const tabixMinmaxCmdStdout = tabixMinmaxCmd.stdout;
+                // console.error(`tabixMinmaxCmdStdout ${tabixMinmaxCmdStdout}`);
+                const tabixMinmaxDataLines = tabixMinmaxCmdStdout.split('\n');
+                // console.error(`tabixMinmaxDataLines ${JSON.stringify(tabixMinmaxDataLines)}`);
+                processedTabixObject.query.tabixMinmaxDataLines = tabixMinmaxDataLines;
+                const tabixMinmaxData = (tabixMinmaxDataLines.length > 2) ? tabixMinmaxDataLines[tabixMinmaxDataLines.length - 2].split('\t') : (tabixMinmaxDataLines.length === 2) ? tabixMinmaxDataLines[0].split('\t') : [];
+                // console.error(`tabixMinmaxData ${JSON.stringify(tabixMinmaxData)}`);
+                processedTabixObject.query.tabixMinmaxData = tabixMinmaxData;
+                if (tabixMinmaxData.length === 4) {
+                  processedTabixObject.query.minmax = tabixMinmaxData[3];
+                }
+                else {
+                  processedTabixObject.query.minmax = defaultMinmax;
+                }
+              }
+              catch (err) {
+                console.error(`tabixMinmaxCmd err ${JSON.stringify(err.message)}`);
+                processedTabixObject.query.minmax = defaultMinmax;
+              }
             }
           });
         }
